@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HMI Industrial Control Panel — PC / Raspberry Pi 5
-Monitoreo de Telemetría Hardware, Sistema Tri-Cámara (ESP32-1, ESP32-2, USB)
+Monitoreo de Telemetría Hardware, Sistema Multi-Cámara (TEL-1, TEL-2, TEL-3, USB)
 e Inferencia YOLOv11n con Doble ROI y Control Inteligente de Semáforo.
 """
 import platform, cv2, time, os, sys, json, threading, queue, shutil, csv, datetime, socket, struct
@@ -258,8 +258,6 @@ class ModernCameraApp(ctk.CTk):
                 "url": s_url, "shot": shot_url, "status": st_url,
                 "online": False, "latency": 0, "backoff_until": 0.0,
             }
-        # Compatibilidad con referencias previas
-        self.esp32_cameras = self.phone_cameras
         self.start_time_stamp = time.time()
         self._last_node_probe_ts = 0.0
         self._node_probe_running = False
@@ -1891,7 +1889,7 @@ class ModernCameraApp(ctk.CTk):
         self._attach_resize_grip(win, min_w=210, min_h=155)
 
     def _toggle_nodes(self):
-        """Abre o cierra una ventana interactiva y redimensionable para el Estado de Nodos ESP32."""
+        """Abre o cierra una ventana interactiva y redimensionable para el Estado de Nodos de Cámara."""
         if self._nodes_win is not None and self._nodes_win.winfo_exists():
             self.nodes_visible = False
             self._nodes_win.destroy()
@@ -2016,7 +2014,7 @@ class ModernCameraApp(ctk.CTk):
             except Exception:
                 pass
 
-        for cid, cam in self.esp32_cameras.items():
+        for cid, cam in self.phone_cameras.items():
             if cam["online"]:
                 active_nodes += 1
                 total_lat += cam["latency"]
@@ -2145,7 +2143,7 @@ class ModernCameraApp(ctk.CTk):
         self._ui_call(lambda: self.status_badge.configure(text=f" [ {text} ] ", text_color=color))
 
     def _force_close_http_resp(self, resp):
-        """Envia TCP RST inmediato (SO_LINGER=0) + shutdown para liberar el httpd monohilo del ESP32 en <2ms."""
+        """Envia TCP RST inmediato (SO_LINGER=0) + shutdown para liberar el socket HTTP en <2ms."""
         if resp is None:
             return
         try:
@@ -2195,7 +2193,7 @@ class ModernCameraApp(ctk.CTk):
         self._producer_stop_event.set()
         self._last_switch_ts = time.time()
 
-        # Cerrar inmediatamente el socket HTTP MJPEG con TCP RST para desbloquear iter_content y el ESP32
+        # Cerrar inmediatamente el socket HTTP MJPEG con TCP RST para desbloquear iter_content
         if self.http_stream_resp is not None:
             resp_to_close = self.http_stream_resp
             self.http_stream_resp = None
@@ -2286,8 +2284,8 @@ class ModernCameraApp(ctk.CTk):
 
         raise ConnectionError(f"No se detectó o está en uso '{USB_CAMERA_TARGET}'")
 
-    def _open_esp32_stream(self, url, stop_event):
-        """Abre el stream HTTP MJPEG con reintentos rápidos si el ESP32 estaba cerrando un socket previo."""
+    def _open_mjpeg_stream(self, url, stop_event):
+        """Abre el stream HTTP MJPEG con reintentos rápidos."""
         last_err = None
         for attempt in range(3):
             if stop_event.is_set():
@@ -2348,7 +2346,7 @@ class ModernCameraApp(ctk.CTk):
                 self._last_switch_ts = time.time()
 
                 print(f"Conectando por HTTP MJPEG directo a {cam_info['name']} ({cam_info['url']})...")
-                resp = self._open_esp32_stream(cam_info["url"], stop_event)
+                resp = self._open_mjpeg_stream(cam_info["url"], stop_event)
                 if session_id != self._stream_session_id or stop_event.is_set():
                     self._force_close_http_resp(resp)
                     return
@@ -2435,7 +2433,7 @@ class ModernCameraApp(ctk.CTk):
                     if resp is None:
                         try:
                             self._set_status(f"RECONECTANDO TEL-{cam_id}...", C_YELLOW)
-                            resp = self._open_esp32_stream(cam_url, stop_event)
+                            resp = self._open_mjpeg_stream(cam_url, stop_event)
                             if stop_event.is_set() or session_id != self._stream_session_id:
                                 self._force_close_http_resp(resp)
                                 break
