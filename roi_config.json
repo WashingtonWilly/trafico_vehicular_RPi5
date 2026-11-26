@@ -42,7 +42,7 @@
   ],
   "semaforo_sources": {
     "1": "TEL-1",
-    "2": "TEL-2",
+    "2": "USB",
     "3": "TEL-3"
   },
   "rois_by_source": {

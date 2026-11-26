@@ -25,7 +25,6 @@ except ImportError:
     pass
 
 from semaforo import (
-    CARGAS_ORDEN,
     ControladorCruceAdaptativo,
     SemaforoController,
     crear_semaforos_fisicos,
@@ -343,11 +342,6 @@ class ModernCameraApp(ctk.CTk):
         self._roi_calib_mode = None
         self._roi_calib_points = []
         self._roi_dialog = None
-
-        # Estructuras de tracking vehicular (Juan_YOLOV11n)
-        self.tracking_autos = {}
-        self.siguiente_id_auto = 1
-        self.historial_tiempos_parada = deque(maxlen=50)
         
         # FASE 3: CSV Buffering I/O
         self._metrics_buffer = []
@@ -1324,7 +1318,7 @@ class ModernCameraApp(ctk.CTk):
         self.lbl_mini_semaforo.grid(row=0, column=0, padx=4, pady=(3, 1))
 
         self.lbl_mini_count = ctk.CTkLabel(
-            self.left_mini_card, text="VEH:0 | ACT:0 | PK:0\nVERDE CALC: 5s",
+            self.left_mini_card, text="ROJO: 0 veh | PK: 0\nVERDE: 25s",
             font=self.font_s, text_color=C_TEXT, corner_radius=0, justify="center")
         self.lbl_mini_count.grid(row=1, column=0, padx=4, pady=(0, 4))
 
@@ -1340,11 +1334,6 @@ class ModernCameraApp(ctk.CTk):
             self.bottom_bar, text=" [ SIN SEÑAL ] ",
             font=self.font_s, text_color=C_MUTED, corner_radius=0)
         self.status_badge.grid(row=0, column=0, padx=4, sticky="w")
-
-        self.semaforo_bar_badge = ctk.CTkLabel(
-            self.bottom_bar, text="S1:VERDE 25.0s | S2:R | S3:R",
-            font=self.font_b, text_color=C_GREEN, corner_radius=0)
-        self.semaforo_bar_badge.grid(row=0, column=1, padx=4)
 
         self.fps_badge = ctk.CTkLabel(
             self.bottom_bar, text=" -- FPS ",
@@ -1412,14 +1401,9 @@ class ModernCameraApp(ctk.CTk):
         self.roi_switch.grid(row=0, column=1, padx=6, pady=(6, 3), sticky="w")
 
         self.label_count = ctk.CTkLabel(
-            det_frame, text="FLUJO:0 | DET:0 | PK:0\nVERDE CALC: 25s",
+            det_frame, text="ROJO: 0 veh | PK: 0\nVERDE: 25s",
             font=self.font_s, text_color=C_TEXT, corner_radius=0, justify="left")
-        self.label_count.grid(row=1, column=0, padx=6, pady=2, sticky="w")
-
-        self.label_semaforo = ctk.CTkLabel(
-            det_frame, text="[ S1 VERDE: 25.0s ]",
-            font=self.font_b, text_color=C_GREEN, corner_radius=0)
-        self.label_semaforo.grid(row=1, column=1, padx=6, pady=2, sticky="e")
+        self.label_count.grid(row=1, column=0, columnspan=2, padx=6, pady=2, sticky="w")
 
         # Botones de delimitación de Polígonos ROI (En vivo y Por Coordenadas)
         roi_btn_frame = ctk.CTkFrame(det_frame, fg_color="transparent", corner_radius=0)
@@ -1550,7 +1534,6 @@ class ModernCameraApp(ctk.CTk):
         ).grid(row=0, column=1, padx=4, pady=2, sticky="e")
 
         self._sem_cards = {}
-        self._sim_btns = {2: {}, 3: {}}
         titulos = {
             1: "S1 · IDA (GPIO 16/20/21)",
             2: "S2 · VUELTA (GPIO 5/6/13)",
@@ -1588,7 +1571,7 @@ class ModernCameraApp(ctk.CTk):
 
             lbl_sub = ctk.CTkLabel(
                 info_col,
-                text="COLA: 0 | VERDE: 25.0s" if sid == 1 else "CARGA: Sin tráfico",
+                text="VEH: 0 | VERDE: 25.0s",
                 font=self.font_s, text_color=C_MUTED, anchor="w", corner_radius=0
             )
             lbl_sub.grid(row=1, column=0, sticky="w")
@@ -1615,13 +1598,13 @@ class ModernCameraApp(ctk.CTk):
                 "sub": lbl_sub,
             }
 
-            # Selector de fuente de video asignada a este semáforo (para inferencia YOLOv11n)
+            # Selector de cámara asignada a este semáforo (conteo en rojo con YOLOv11n)
             src_assign_row = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-            src_assign_row.grid(row=1, column=0, columnspan=3, padx=5, pady=(0, 3), sticky="ew")
+            src_assign_row.grid(row=1, column=0, columnspan=3, padx=5, pady=(0, 4), sticky="ew")
             src_assign_row.grid_columnconfigure(1, weight=1)
 
             ctk.CTkLabel(
-                src_assign_row, text="Fuente IA:", font=self.font_s,
+                src_assign_row, text="Cámara:", font=self.font_s,
                 text_color=C_MUTED, anchor="w", corner_radius=0
             ).grid(row=0, column=0, padx=(2, 4), sticky="w")
 
@@ -1644,42 +1627,11 @@ class ModernCameraApp(ctk.CTk):
             self._sem_source_vars[sid] = src_var
             self._sem_source_menus[sid] = src_menu
 
-            if sid in (2, 3):
-                btn_row = ctk.CTkFrame(card, fg_color="transparent", corner_radius=0)
-                btn_row.grid(row=2, column=0, columnspan=3, padx=5, pady=(0, 4), sticky="ew")
-                btn_row.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform=f"sim_{sid}")
-                etiquetas_btn = {
-                    "Sin tráfico": "Sin tráf",
-                    "Normal": "Normal",
-                    "Congestión": "Congest",
-                    "Auto": "Auto IA",
-                }
-
-                for b_idx, carga in enumerate(CARGAS_ORDEN):
-                    btn = ctk.CTkButton(
-                        btn_row,
-                        text=etiquetas_btn.get(carga, carga),
-                        height=18,
-                        font=self.font_s,
-                        corner_radius=3,
-                        fg_color=C_ACCENT if carga == "Sin tráfico" else "#1E293B",
-                        hover_color=C_ACCENT2,
-                        text_color=C_TEXT,
-                        command=lambda s=sid, c=carga: self._set_carga_simulada(s, c),
-                    )
-                    btn.grid(row=0, column=b_idx, padx=1, sticky="ew")
-                    self._sim_btns[sid][carga] = btn
-
     def _on_sem_source_change(self, sem_id, source_val):
-        """Asigna dinámicamente una fuente de video (TEL-1/2/3, USB, Ninguna) a un semáforo."""
+        """Asigna dinámicamente una cámara (TEL-1/2/3, USB, Ninguna) a un semáforo."""
         self.sem_source_map[sem_id] = source_val
         self._save_roi_config()
-        self._log_terminal("SEM", f"S{sem_id} ASIGNADO A FUENTE -> {source_val}")
-        if sem_id in (2, 3) and self._yolo_active:
-            if source_val != "Ninguna":
-                self._set_carga_simulada(sem_id, "Auto")
-            else:
-                self._set_carga_simulada(sem_id, "Sin tráfico")
+        self._log_terminal("SEM", f"S{sem_id} ASIGNADO A CÁMARA -> {source_val}")
 
     def _get_primary_sid_for_source(self, source_name):
         """Devuelve el primer semáforo (1, 2 o 3) asignado a `source_name`, o 1 por defecto."""
@@ -1691,12 +1643,6 @@ class ModernCameraApp(ctk.CTk):
     def _get_semaphores_for_source(self, source_name):
         """Devuelve todos los IDs de semáforo cuya fuente asignada coincide con `source_name`."""
         return [sid for sid in (1, 2, 3) if self.sem_source_map.get(sid) == source_name]
-
-    def _set_carga_simulada(self, sem_id, carga):
-        self.cruce.set_carga_simulada(sem_id, carga)
-        for c_name, btn in self._sim_btns[sem_id].items():
-            btn.configure(fg_color=C_ACCENT if c_name == carga else "#1E293B")
-        self._log_terminal("SEM", f"S{sem_id} CONFIGURADO -> {carga.upper()}")
 
     def _test_semaforos_fisicos(self):
         """Enciende los 9 LEDs (S1, S2, S3) durante 1.2s en la RPi 5 para comprobar conexión física."""
@@ -1728,25 +1674,11 @@ class ModernCameraApp(ctk.CTk):
         # Obtener estado de la luz correspondiente al semáforo vinculado a la cámara activa
         active_sid = self._get_primary_sid_for_source(self._active_source)
         active_light = estado[f"s{active_sid}"]
-
-        s1_col = colores[estado["s1"]]
         act_col = colores[active_light]
-
-        if hasattr(self, "semaforo_bar_badge"):
-            self.semaforo_bar_badge.configure(
-                text=f"S1:{estado['s1']} {estado['restante_s1']:.1f}s | S2:{abrev[estado['s2']]} | S3:{abrev[estado['s3']]}",
-                text_color=s1_col,
-            )
-
-        if hasattr(self, "label_semaforo"):
-            self.label_semaforo.configure(
-                text=f"[ S{active_sid} {active_light}: {estado[f'restante_s{active_sid}']:.1f}s ]",
-                text_color=act_col,
-            )
 
         if hasattr(self, "lbl_mini_semaforo"):
             self.lbl_mini_semaforo.configure(
-                text=f"S1:{abrev[estado['s1']]} | S2:{abrev[estado['s2']]} | S3:{abrev[estado['s3']]} ({estado['restante_fase']:.1f}s)",
+                text=f"S{active_sid}: {active_light} ({estado[f'restante_s{active_sid}']:.1f}s)",
                 text_color=act_col,
             )
 
@@ -1787,22 +1719,15 @@ class ModernCameraApp(ctk.CTk):
                 card["luz"].configure(text=luz, text_color=colores[luz])
                 card["tiempo"].configure(text=f"{estado[key_rest]:.1f}s")
 
-            self._sem_cards[1]["sub"].configure(
-                text=f"COLA: {estado['cola_s1']} autos | VERDE: {estado['ultimo_verde_s1']:.1f}s"
-            )
-            if estado["carga_s2"] == "Auto":
-                self._sem_cards[2]["sub"].configure(
-                    text=f"AUTO IA | COLA: {estado['cola_s2']} | V: {estado['ultimo_verde_s2']:.1f}s"
-                )
-            else:
-                self._sem_cards[2]["sub"].configure(text=f"CARGA: {estado['carga_s2']} ({estado['ultimo_verde_s2']:.0f}s)")
-
-            if estado["carga_s3"] == "Auto":
-                self._sem_cards[3]["sub"].configure(
-                    text=f"AUTO IA | COLA: {estado['cola_s3']} | V: {estado['ultimo_verde_s3']:.1f}s"
-                )
-            else:
-                self._sem_cards[3]["sub"].configure(text=f"CARGA: {estado['carga_s3']} ({estado['ultimo_verde_s3']:.0f}s)")
+            for sid in (1, 2, 3):
+                src_asig = self.sem_source_map.get(sid, "Ninguna")
+                cola = estado[f"cola_s{sid}"]
+                verde_asig = estado[f"ultimo_verde_s{sid}"]
+                if src_asig == "Ninguna":
+                    sub_txt = f"SIN CÁMARA | VERDE: {verde_asig:.1f}s"
+                else:
+                    sub_txt = f"VEH: {cola} | VERDE: {verde_asig:.1f}s"
+                self._sem_cards[sid]["sub"].configure(text=sub_txt)
 
         # Verificar periódicamente el puente UDP hacia RPi 5 cuando corre en Windows
         if not IS_PI and (time.time() - self._last_gpio_ping_ts >= 5.0):
@@ -2215,7 +2140,6 @@ class ModernCameraApp(ctk.CTk):
 
         with self._yolo_lock:
             self._latest_yolo_boxes = []
-            self.tracking_autos.clear()
 
         if self.cap is not None:
             try:
@@ -2663,15 +2587,9 @@ class ModernCameraApp(ctk.CTk):
         if not self._yolo_active:
             with self._yolo_lock:
                 self._latest_yolo_boxes = []
-                self.tracking_autos.clear()
-            self._set_count_labels("FLUJO:0 | DET:0 | PK:0\nVERDE CALC: 25s", C_TEXT)
+            self._set_count_labels("ROJO: 0 veh | PK: 0\nVERDE: 25s", C_TEXT)
             self._log_terminal("IA", "YOLOv11n DESACTIVADO (CRUCE EN MODO NORMAL)")
             return
-
-        # Si S2 o S3 tienen una fuente asignada, activar su modo Auto IA automáticamente
-        for sid in (2, 3):
-            if self.sem_source_map.get(sid, "Ninguna") != "Ninguna":
-                self._set_carga_simulada(sid, "Auto")
 
         if self.local_model is not None:
             self._ensure_yolo_worker()
@@ -2699,7 +2617,7 @@ class ModernCameraApp(ctk.CTk):
             self.local_model = YOLO(model_path)
             self._ensure_yolo_worker()
             self._ui_call(lambda: self._set_count_labels(
-                "FLUJO:0 | DET:0 | PK:0\nVERDE CALC: 25s", C_TEXT))
+                "ROJO: 0 veh | PK: 0\nVERDE: 25s", C_TEXT))
             self._log_terminal("IA", "YOLOv11n CARGADO EXITOSAMENTE")
         except Exception as e:
             err_msg = str(e)
@@ -2724,7 +2642,7 @@ class ModernCameraApp(ctk.CTk):
             threading.Thread(target=self._bg_red_worker_loop, daemon=True).start()
 
     def _yolo_worker_loop(self):
-        """Ejecuta la inferencia YOLOv11n + Dual ROI + Tracking de Semáforo en segundo plano."""
+        """Ejecuta inferencia YOLOv11n + Doble ROI solo cuando el semáforo vinculado está en ROJO."""
         import torch
         while True:
             try:
@@ -2738,6 +2656,24 @@ class ModernCameraApp(ctk.CTk):
                 continue
 
             try:
+                active_src_snap = self._active_source
+                linked_sids = self._get_semaphores_for_source(active_src_snap)
+                active_sid = linked_sids[0] if linked_sids else 1
+                estado_cruce = self.cruce.get_estado()
+                sids_en_rojo = [sid for sid in linked_sids if estado_cruce[f"s{sid}"] == "ROJO"]
+
+                # El semáforo solo activa el modelo y cuenta cuando está en ROJO
+                if not sids_en_rojo:
+                    with self._yolo_lock:
+                        self._latest_yolo_boxes = []
+                    cola_prev = estado_cruce[f"cola_s{active_sid}"]
+                    green_calc = int(estado_cruce[f"ultimo_verde_s{active_sid}"])
+                    sem_tag = ",".join(f"S{s}" for s in linked_sids) if linked_sids else "SIN SEM"
+                    luz_actual = estado_cruce[f"s{active_sid}"]
+                    label_text = f"{luz_actual} (EN ESPERA) | ULT:{cola_prev} veh\n{sem_tag} VERDE: {green_calc}s"
+                    self._ui_call(lambda t=label_text: self._set_count_labels(t, C_MUTED))
+                    continue
+
                 start_inf = time.time()
                 # FASE 2: YOLO imgsz dinámico (160 en Pi5 = 40% más rápido) con torch.no_grad() y lock seguro
                 with self._yolo_infer_lock, torch.no_grad():
@@ -2758,7 +2694,6 @@ class ModernCameraApp(ctk.CTk):
                     continue
 
                 h, w = frame.shape[:2]
-                active_src_snap = self._active_source
                 pts_pk, pts_mv = self._get_scaled_rois(w, h, source_name=active_src_snap)
                 cnt_pk = pts_pk.reshape((-1, 1, 2))
                 cnt_mv = pts_mv.reshape((-1, 1, 2))
@@ -2777,19 +2712,12 @@ class ModernCameraApp(ctk.CTk):
                     # Prioridad 1: Zona de Parqueo (Exclusión)
                     if cv2.pointPolygonTest(cnt_pk, (float(cx), float(cy)), False) >= 0:
                         cuadro_estacionados.append((x1, y1, x2, y2, conf_val))
-                    # Prioridad 2: Zona de Movimiento (Flujo Activo)
+                    # Prioridad 2: Zona de Movimiento / Conteo en Rojo
                     elif cv2.pointPolygonTest(cnt_mv, (float(cx), float(cy)), False) >= 0:
                         cuadro_actual.append((x1, y1, x2, y2, cx, cy, conf_val))
                     else:
                         cuadro_fuera.append((x1, y1, x2, y2, conf_val))
 
-                # Escalar tolerancias de seguimiento por proximidad según resolución actual vs 1920x1080
-                scale_diag = np.hypot(w, h) / np.hypot(1920.0, 1080.0)
-                max_match_dist = max(18.0, 60.0 * scale_diag)
-                stop_move_thresh = max(1.8, 4.0 * scale_diag)
-                now_mono = time.monotonic()
-
-                cuadro_actual_actualizado_ids = {}
                 boxes_out = []
 
                 # 1. Vehículos fuera de ambas ROIs (Gris discreto, normalizados 0..1)
@@ -2800,93 +2728,23 @@ class ModernCameraApp(ctk.CTk):
                 for (px1, py1, px2, py2, _) in cuadro_estacionados:
                     boxes_out.append((px1 / float(w), py1 / float(h), px2 / float(w), py2 / float(h), "Parqueado", (0, 165, 255)))
 
-                # Consultar luz actual del semáforo principal vinculado a la cámara activa
-                linked_sids = self._get_semaphores_for_source(self._active_source)
-                active_sid = linked_sids[0] if linked_sids else 1
-                estado_cruce = self.cruce.get_estado()
-                luz_activa = estado_cruce[f"s{active_sid}"]
-
-                # 3. Vehículos en Zona de Flujo: seguimiento y detección de detenidos
-                for x1, y1, x2, y2, cx, cy, conf_val in cuadro_actual:
-                    asociado_id = None
-                    distancia_minima = max_match_dist
-
-                    for id_auto, datos in self.tracking_autos.items():
-                        if id_auto in cuadro_actual_actualizado_ids:
-                            continue
-                        last_cx, last_cy = datos["ultima_pos"]
-                        dist = float(np.hypot(cx - last_cx, cy - last_cy))
-                        if dist < distancia_minima:
-                            distancia_minima = dist
-                            asociado_id = id_auto
-
-                    if asociado_id is None:
-                        asociado_id = self.siguiente_id_auto
-                        self.siguiente_id_auto += 1
-                        self.tracking_autos[asociado_id] = {
-                            "ultima_pos": (cx, cy),
-                            "pos_ancla_parada": (cx, cy),
-                            "detenido": False,
-                            "tiempo_parado_seg": 0.0,
-                            "t_inicio_parada": None
-                        }
-
-                    datos_auto = self.tracking_autos[asociado_id]
-                    anchor_x, anchor_y = datos_auto["pos_ancla_parada"]
-                    movimiento_val = float(np.hypot(cx - anchor_x, cy - anchor_y))
-                    datos_auto["ultima_pos"] = (cx, cy)
-
-                    if movimiento_val <= stop_move_thresh:
-                        if not datos_auto["detenido"]:
-                            datos_auto["detenido"] = True
-                            datos_auto["t_inicio_parada"] = now_mono
-                            datos_auto["pos_ancla_parada"] = (cx, cy)
-                        else:
-                            datos_auto["tiempo_parado_seg"] = now_mono - datos_auto["t_inicio_parada"]
-                    else:
-                        if datos_auto["detenido"] and datos_auto["t_inicio_parada"] is not None:
-                            tiempo_final = now_mono - datos_auto["t_inicio_parada"]
-                            if tiempo_final > 1.5:
-                                self.historial_tiempos_parada.append(tiempo_final)
-                        datos_auto["detenido"] = False
-                        datos_auto["tiempo_parado_seg"] = 0.0
-                        datos_auto["t_inicio_parada"] = None
-                        datos_auto["pos_ancla_parada"] = (cx, cy)
-
-                    if luz_activa == "ROJO":
-                        color_p = (0, 0, 255)
-                        label_p = f"ID {asociado_id} ROJO"
-                    else:
-                        color_p = (0, 255, 0)
-                        label_p = f"ID {asociado_id} FLUJO"
-
-                    cuadro_actual_actualizado_ids[asociado_id] = (x1, y1, x2, y2, cx, cy)
-                    boxes_out.append((x1 / float(w), y1 / float(h), x2 / float(w), y2 / float(h), label_p, color_p))
-
-                # Limpiar IDs que salieron de la zona de movimiento
-                ids_fuera = set(self.tracking_autos.keys()) - set(cuadro_actual_actualizado_ids.keys())
-                for id_f in ids_fuera:
-                    del self.tracking_autos[id_f]
+                # 3. Vehículos contados en ROJO dentro de la ROI de vía
+                for idx_v, (x1, y1, x2, y2, cx, cy, conf_val) in enumerate(cuadro_actual, start=1):
+                    boxes_out.append((x1 / float(w), y1 / float(h), x2 / float(w), y2 / float(h), f"V{idx_v}", (0, 0, 255)))
 
                 with self._yolo_lock:
                     self._latest_yolo_boxes = boxes_out
 
-                total_flujo = len(cuadro_actual)
+                total_rojo = len(cuadro_actual)
                 parqueados_count = len(cuadro_estacionados)
-                detenidos_count = sum(
-                    1 for id_a in cuadro_actual_actualizado_ids
-                    if self.tracking_autos.get(id_a, {}).get("detenido")
-                    and self.tracking_autos.get(id_a, {}).get("tiempo_parado_seg", 0.0) >= 0.5
-                )
 
-                # Alimentar la cola de TODOS los semáforos vinculados a la fuente de video activa
-                cola_reportada = max(detenidos_count, total_flujo) if luz_activa == "ROJO" else detenidos_count
-                for sid in linked_sids:
-                    self.cruce.registrar_detenidos(sid, cola_reportada)
+                # Alimentar la cola únicamente de los semáforos vinculados que están en ROJO
+                for sid in sids_en_rojo:
+                    self.cruce.registrar_detenidos(sid, total_rojo)
 
-                green_calc = int(estado_cruce[f"ultimo_verde_s{active_sid}"])
-                sem_tag = ",".join(f"S{s}" for s in linked_sids) if linked_sids else "SIN SEM"
-                label_text = f"FLUJO:{total_flujo} | DET:{detenidos_count} | PK:{parqueados_count}\n{sem_tag} VERDE: {green_calc}s"
+                green_calc = int(self.cruce.get_estado()[f"ultimo_verde_s{active_sid}"])
+                sem_tag = ",".join(f"S{s}" for s in sids_en_rojo)
+                label_text = f"ROJO: {total_rojo} veh | PK: {parqueados_count}\n{sem_tag} VERDE: {green_calc}s"
 
                 self._ui_call(lambda t=label_text: self._set_count_labels(t, C_TEXT))
             except Exception as e:
@@ -2964,7 +2822,6 @@ class ModernCameraApp(ctk.CTk):
     def _update_semaforo(self, text, color):
         def _set_sem(col):
             try:
-                self.label_semaforo.configure(text=text, text_color=col)
                 if hasattr(self, "lbl_mini_semaforo"):
                     self.lbl_mini_semaforo.configure(text=text, text_color=col)
             except Exception:

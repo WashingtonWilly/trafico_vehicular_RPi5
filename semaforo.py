@@ -18,10 +18,10 @@ RPI_GPIO_HOST = os.getenv("RPI_GPIO_HOST", "192.168.0.6").strip()
 RPI_GPIO_PORT = int(os.getenv("RPI_GPIO_PORT", "5055"))
 
 # ─── TIEMPOS DEL CRUCE ADAPTATIVO (SEGUNDOS) ────────────────────────────────
-T_VERDE_VACIO = 10.0   # 0 vehículos detenidos
-T_VERDE_MIN = 15.0     # 1 - 2 vehículos detenidos
-T_VERDE_NORMAL = 25.0  # 3 - 5 vehículos detenidos (y modo normal fijo)
-T_VERDE_MAX = 40.0     # 6+ vehículos detenidos
+T_VERDE_VACIO = 10.0   # 0 vehículos en rojo (tiempo base mínimo)
+T_VERDE_MIN = 15.0     # 1 - 2 vehículos en rojo
+T_VERDE_NORMAL = 25.0  # 3 - 5 vehículos en rojo (y modo normal fijo)
+T_VERDE_MAX = 30.0     # 6+ vehículos en rojo (tope máximo de congestión)
 T_AMARILLO = 3.0       # Amarillo fijo de seguridad
 T_TODO_ROJO = 1.0      # Todo-Rojo de despeje entre fases
 
@@ -377,16 +377,16 @@ class ControladorCruceAdaptativo:
         self._lock = threading.Lock()
 
         self.modo_adaptativo = False
-        self.carga_s2 = "Sin tráfico"
-        self.carga_s3 = "Sin tráfico"
+        self.carga_s2 = "Auto"
+        self.carga_s3 = "Auto"
 
         self._muestras_rojas = {1: [], 2: [], 3: []}
         self._cola_actual = {1: 0, 2: 0, 3: 0}
         self.ultimo_conteo = {1: 0, 2: 0, 3: 0}
         self.ultimo_conteo_s1 = 0
         self.ultimo_verde_s1 = T_VERDE_NORMAL
-        self.ultimo_verde_s2 = T_VERDE_VACIO
-        self.ultimo_verde_s3 = T_VERDE_VACIO
+        self.ultimo_verde_s2 = T_VERDE_NORMAL
+        self.ultimo_verde_s3 = T_VERDE_NORMAL
         self.ultimo_verde_f1 = T_VERDE_NORMAL
 
         self.fase = "F1_VERDE"
@@ -412,22 +412,23 @@ class ControladorCruceAdaptativo:
                 raise ValueError(f"Solo S2 y S3 aceptan selector de carga, recibido: {semaforo_id!r}")
 
     def registrar_detenidos(self, semaforo_id, count, now=None):
-        """Registra la cantidad actual de vehículos detenidos en la ROI de S1, S2 o S3."""
+        """Registra la cantidad de vehículos detectados en la ROI solo cuando el semáforo está en ROJO."""
         if semaforo_id not in (1, 2, 3):
             raise ValueError(f"ID de semáforo inválido: {semaforo_id!r}")
         t = self._clock() if now is None else now
         val = max(0, int(count))
         with self._lock:
-            self._cola_actual[semaforo_id] = val
             en_rojo = self._es_en_rojo_locked(semaforo_id)
-            if en_rojo:
-                lista = self._muestras_rojas[semaforo_id]
-                lista.append((t, val))
-                if len(lista) > 120:
-                    corte = t - 5.0
-                    self._muestras_rojas[semaforo_id] = [
-                        (ts, v) for ts, v in lista if ts >= corte
-                    ]
+            if not en_rojo:
+                return
+            self._cola_actual[semaforo_id] = val
+            lista = self._muestras_rojas[semaforo_id]
+            lista.append((t, val))
+            if len(lista) > 120:
+                corte = t - 5.0
+                self._muestras_rojas[semaforo_id] = [
+                    (ts, v) for ts, v in lista if ts >= corte
+                ]
 
     def registrar_detenidos_s1(self, count, now=None):
         """Alias compatible para registrar vehículos detenidos en S1."""
@@ -487,6 +488,8 @@ class ControladorCruceAdaptativo:
         elif self.fase == "F1_AMARILLO":
             self.fase = "F1_TODO_ROJO"
             self.fase_duracion = T_TODO_ROJO
+            self._cola_actual[1] = 0
+            self._muestras_rojas[1] = []
         elif self.fase == "F1_TODO_ROJO":
             n_s2 = self._calcular_conteo_estable_rojo_locked(2, siguiente_inicio)
             t_s2 = self._tiempo_para_secundario_locked(2, self.carga_s2, n_s2)
@@ -502,6 +505,8 @@ class ControladorCruceAdaptativo:
         elif self.fase == "F2_AMARILLO":
             self.fase = "F2_TODO_ROJO"
             self.fase_duracion = T_TODO_ROJO
+            self._cola_actual[2] = 0
+            self._muestras_rojas[2] = []
         elif self.fase == "F2_TODO_ROJO":
             n_s3 = self._calcular_conteo_estable_rojo_locked(3, siguiente_inicio)
             t_s3 = self._tiempo_para_secundario_locked(3, self.carga_s3, n_s3)
@@ -517,6 +522,8 @@ class ControladorCruceAdaptativo:
         elif self.fase == "F3_AMARILLO":
             self.fase = "F3_TODO_ROJO"
             self.fase_duracion = T_TODO_ROJO
+            self._cola_actual[3] = 0
+            self._muestras_rojas[3] = []
         else:  # F3_TODO_ROJO -> F1_VERDE
             n_s1 = self._calcular_conteo_estable_rojo_locked(1, siguiente_inicio)
             t_s1 = calcular_tiempo_verde_s1(n_s1) if self.modo_adaptativo else T_VERDE_NORMAL
@@ -555,9 +562,13 @@ class ControladorCruceAdaptativo:
         restante = max(0.0, self.fase_duracion - (now - self.fase_inicio))
         s1, s2, s3 = self._luces_por_fase_locked()
 
-        t_f1_est = calcular_tiempo_verde_s1(self._cola_actual[1]) if self.modo_adaptativo else T_VERDE_NORMAL
-        t_f2_est = self._tiempo_para_secundario_locked(2, self.carga_s2, self._cola_actual[2])
-        t_f3_est = self._tiempo_para_secundario_locked(3, self.carga_s3, self._cola_actual[3])
+        cola_s1 = self._cola_actual[1] if self._es_en_rojo_locked(1) else self.ultimo_conteo[1]
+        cola_s2 = self._cola_actual[2] if self._es_en_rojo_locked(2) else self.ultimo_conteo[2]
+        cola_s3 = self._cola_actual[3] if self._es_en_rojo_locked(3) else self.ultimo_conteo[3]
+
+        t_f1_est = calcular_tiempo_verde_s1(cola_s1) if self.modo_adaptativo else T_VERDE_NORMAL
+        t_f2_est = self._tiempo_para_secundario_locked(2, self.carga_s2, cola_s2)
+        t_f3_est = self._tiempo_para_secundario_locked(3, self.carga_s3, cola_s3)
 
         if self.fase == "F1_VERDE":
             rest_s1 = restante
@@ -595,10 +606,6 @@ class ControladorCruceAdaptativo:
             rest_s1 = restante
             rest_s2 = restante + t_f1_est + T_AMARILLO + T_TODO_ROJO
             rest_s3 = rest_s2 + t_f2_est + T_AMARILLO + T_TODO_ROJO
-
-        cola_s1 = self._cola_actual[1] if self._es_en_rojo_locked(1) else self.ultimo_conteo[1]
-        cola_s2 = self._cola_actual[2] if self._es_en_rojo_locked(2) else self.ultimo_conteo[2]
-        cola_s3 = self._cola_actual[3] if self._es_en_rojo_locked(3) else self.ultimo_conteo[3]
 
         return {
             "fase": self.fase,
