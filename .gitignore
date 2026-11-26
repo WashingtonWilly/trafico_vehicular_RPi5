@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+desktop.ini
+registros/*.jpg
+registros/*.png
+registros/*.csv
+registros/snapshots/
